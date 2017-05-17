@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<extensions xmlns="http://www.demandware.com/xml/bmmodules/2007-12-11" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.demandware.com/xml/bmmodules/2007-12-11 bmext.xsd">
+    <menuitem id="qordobaTesting" position="99999" site="true">
+        <name xml:lang="x-default">Qordoba</name>
+        <short_description xml:lang="x-default">
+            Manage assets translations
+        </short_description>
+        <description xml:lang="x-default">
+            Here you can manage translations of products, categories and site content.
+        </description>
+        <icon>images/qordoba-icon.png</icon>
+    </menuitem>
+    <menuaction id="qordobaTesting_translate_product" menupath="qordobaTesting" position="1" site="true">
+        <name xml:lang="x-default">Product translation</name>
+        <short_description xml:lang="x-default">
+            Submit product data for translation
+        </short_description>
+        <description xml:lang="x-default">
+            Submit product data for translation
+        </description>
+        <exec pipeline="QordobaProduct" node="ShowCategory"/>
+        <sub-pipelines>
+            <pipeline name="QordobaProduct" />
+        </sub-pipelines>
+        <parameters>
+            <parameter name="menuname" value="Product translation"/>
+            <parameter name="menupath" value="qordobaTesting"/>
+            <parameter name="mainmenuname" value="Qordoba"/>
+            <parameter name="page" value="1"/>
+        </parameters>
+        <icon>icons/product_ico.gif</icon>
+    </menuaction>
+
+    <menuaction id="qordobaTesting_translate_category" menupath="qordobaTesting" position="2" site="true">
+        <name xml:lang="x-default">Category translation</name>
+        <short_description xml:lang="x-default">
+            Submit category data for translation
+        </short_description>
+        <description xml:lang="x-default">
+            Submit category data for translation
+        </description>
+        <exec pipeline="Category" node="List"/>
+        <sub-pipelines>
+            <pipeline name="Category" />
+        </sub-pipelines>
+        <parameters>
+
+        </parameters>
+        <icon>icons/catalog_ico.gif</icon>
+    </menuaction>
+    <menuaction id="qordobaTesting_translate_content_asset" menupath="qordobaTesting" position="3" site="true">
+        <name xml:lang="x-default">Content assets translation</name>
+        <short_description xml:lang="x-default">
+            Submit content assets for translation
+        </short_description>
+        <description xml:lang="x-default">
+            Submit content assets for translation
+        </description>
+        <exec pipeline="ContentAsset" node="List"/>
+        <sub-pipelines>
+            <pipeline name="ContentAsset" />
+        </sub-pipelines>
+        <parameters>
+            <parameter name="page" value="1"/>
+        </parameters>
+        <icon>icons/content_ico.gif</icon>
+    </menuaction>
+    <menuaction id="qordobaTesting_submission_board" menupath="qordobaTesting" position="4" site="true">
+        <name xml:lang="x-default">Submissions Board</name>
+        <short_description xml:lang="x-default">
+            Manage translation submissions
+        </short_description>
+        <description xml:lang="x-default">
+            Manage translation submissions
+        </description>
+        <exec pipeline="SubmissionBoard" node="SubmissionBoard"/>
+        <sub-pipelines>
+            <pipeline name="SubmissionBoard"/>
+        </sub-pipelines>
+        <icon>images/qordoba-icon.png</icon>
+    </menuaction>
+    <menuaction id="qordobaTesting_configuration" menupath="site-prefs" position="2000" site="true">
+        <name xml:lang="x-default">Qordoba configuration</name>
+        <short_description xml:lang="x-default">
+            Qordoba configuration
+        </short_description>
+        <description xml:lang="x-default">
+            Qordoba configuration for this site.
+        </description>
+        <exec pipeline="configuration" node="Configuration"/>
+        <sub-pipelines>
+            <pipeline name="configuration" />
+        </sub-pipelines>
+        <parameters>
+            <parameter name="PrefGroupID" value="Qordoba Configs"/>
+            <parameter name="PreferenceType" value="SITE"/>
+        </parameters>
+        <icon>images/qordoba-settings-icon.png</icon>
+    </menuaction>
+</extensions>

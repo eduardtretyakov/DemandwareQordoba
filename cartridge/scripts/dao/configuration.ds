@@ -1,0 +1,48 @@
+importPackage( dw.system );
+importPackage( dw.util );
+importScript( "helpFunctions.ds" );
+importScript( "/utils/ExceptionLog.ds" );
+
+var qordobaConfigurationJson : JSON = getConfiguration();
+
+/**
+    Get Project id from qordoba configuration
+*/
+function getProjectId() : String {
+    return qordobaConfigurationJson['project_id'];
+}
+
+/**
+    Get API key from qordoba configuration
+*/
+function getApiKey(): String {
+    return qordobaConfigurationJson['api_key'];
+}
+
+/**
+    Get API URL from qordoba configuration
+*/
+function getApiUrl(): String {
+     return qordobaConfigurationJson['api_url'];
+}
+
+/**
+    Get default network timeout from qordoba configuration
+*/
+function getTimeOut(): String {
+    return qordobaConfigurationJson['time_out'];
+}
+
+/**
+    Get all locale mappings from qordoba configuration
+*/
+function getLocaleMapping(): List {
+    return JSON.parse(qordobaConfigurationJson['target_locale'])['target_locale'];
+}
+
+/**
+    Get source locale from qordoba configuration
+*/
+function getSourceLocale(): String {
+    return qordobaConfigurationJson['source_locale'];
+}

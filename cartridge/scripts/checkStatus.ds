@@ -1,0 +1,74 @@
+/**
+*   @output uuids : dw.util.ArrayList
+*/
+importPackage( dw.system );
+importPackage( dw.object );
+importPackage( dw.util );
+importScript( "dao/submission.ds");
+importScript( "service/submissionService.ds");
+importScript( "/utils/ExceptionLog.ds" );
+
+var LOGGER : ExceptionLog = new ExceptionLog(Logger.getLogger("qordoba", "checkStatus"));
+/**
+   Check the status of custom objects against the qordoba File API.  Record completed string counts into custom object.
+*/
+function execute( pdict : PipelineDictionary ) : Number {
+    LOGGER.error("Check status is called");
+    var uuids: ArrayList = new ArrayList();
+    var submissionsIterator: SeekableIterator = null;
+    try {
+    	
+        submissionsIterator = getAllActiveSubmissionsSortedByFileName();
+        uuids.addAll(getUuidsForOutdatedSubmisisons(submissionsIterator));
+        pdict.uuids = uuids;
+        if (!uuids.empty)
+        {
+            LOGGER.error('Going to call download for uuids = "{0}"', uuids.join());
+        }
+   }   
+    catch (e) {
+      LOGGER.errorException("checkStatus execution failed", e);
+      return PIPELET_ERROR;
+   } finally {
+	   if(submissionsIterator!= null){
+	      submissionsIterator.close();
+	   }
+   }
+   return PIPELET_NEXT;
+}
+
+/**
+    Prepare list of submissions to check their status
+*/
+function getUuidsForOutdatedSubmisisons(submissionsIterator: SeekableIterator): Collection {
+    var result: Collection = new ArrayList();
+
+    var groupped: List = new ArrayList();
+    var processedFileUri: String = "";
+
+    while(submissionsIterator.hasNext()) {
+        var submission: CustomObject = submissionsIterator.next();
+        var submissionFileUri: String = submission.custom['fileUri'];
+        if (submissionFileUri!= null) {
+            groupped.add(submission);
+        }
+    }
+    if(!groupped.isEmpty()){
+        result.addAll(mapCustomObjectToUuids(groupped));
+    }
+    return result;
+}
+
+
+/**
+    Get list of UUID
+*/
+function mapCustomObjectToUuids(customObjects: Collection): Collection {
+    var result: Collection = new ArrayList();
+
+    for each (var customObject : CustomObject in customObjects) {
+        result.add(customObject.getUUID());
+    }
+
+    return result;
+}

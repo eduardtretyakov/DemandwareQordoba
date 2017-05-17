@@ -1,0 +1,121 @@
+importPackage( dw.system );
+importPackage( dw.net );
+importScript( "/dao/configuration.ds" );
+importScript( "/utils/ExceptionLog.ds" );
+
+var LOGGER : ExceptionLog = new ExceptionLog(Logger.getLogger("qordoba", "httpUtils"));
+var version = require("~/cartridge/scripts/version");
+var USER_AGENT_HEADER = "demandware-connector/" + version.getVersion();
+var VALIDATION_ERROR: String = "VALIDATION_ERROR";
+var COULD_NOT_BE_FOUND: String = "could not be found";
+
+/**
+    Custom exception
+*/
+function qordobaFileNotFoundError() {
+    this.name = 'qordobaFileNotFoundError';
+}
+
+/**
+    Build mandatory params for request
+*/
+function addBaseV1RequestParameters(request: String): String {
+    request += "&apiKey=" + getApiKey();
+    request += "&projectId=" + getProjectId();
+    return request;
+}
+
+/**
+    Sends request with stored credentials
+*/
+function sendHttpRequest(method: String, request: String): HTTPClient
+{
+    var requestToSend = getApiUrl() + addBaseV1RequestParameters(request);
+    return sendHttpRequestCommon(method, requestToSend);
+}
+
+function sendTestConnection (
+	apiUrl: String,
+	login: String,
+	password: String
+):HTTPClient {
+	var qordobaTestReq : Object = new Object();
+    var httpClient : HTTPClient = new HTTPClient();
+    
+    qordobaTestReq.username = login;
+    qordobaTestReq.password = password;
+    
+    httpClient.setTimeout(getTimeOut());
+    httpClient.open('PUT', apiUrl);   
+    httpClient.setRequestHeader('Content-Type', 'application/json');
+    
+    httpClient.send(JSON.stringify(qordobaTestReq));
+    
+    LOGGER.error("Sending request {0} {1}", 'PUT', apiUrl);
+
+    if (isSuccessfulResponse(httpClient)) {
+        LOGGER.error("Got successful response!");
+    } else {
+        LOGGER.error("Sending request={0} failed statusCode={1}, errorText={2}", apiUrl, httpClient.statusCode, httpClient.errorText);
+        processFailedResponse(httpClient);
+    }	
+    
+    return httpClient;
+}
+
+/**
+    Sends request with custom credentials
+ */
+function sendHttpRequestWithCustomCreds(method: String, request: String, apiUrl: String, projectId: String, apiKey: String): HTTPClient {
+    var requestToSend = apiUrl;
+    requestToSend += request;
+    return sendHttpRequestCommon(method, requestToSend);
+}
+
+/**
+     Build and send qordoba FAPI request
+ */
+function sendHttpRequestCommon(method: String, requestToSend: String): HTTPClient {
+    var httpClient : HTTPClient = new HTTPClient();
+    httpClient.setTimeout(getTimeOut());
+    httpClient.open(method, requestToSend);
+    httpClient.setRequestHeader("User-Agent", USER_AGENT_HEADER);
+
+    httpClient.send();
+    LOGGER.debug("Sending request {0} {1}", method, requestToSend);
+
+    if (isSuccessfulResponse(httpClient)) {
+        LOGGER.debug("Got successful response: {0}", httpClient.text);
+    } else {
+        LOGGER.error("Sending request={0} failed statusCode={1}, errorText={2}", requestToSend, httpClient.statusCode, httpClient.errorText);
+        processFailedResponse(httpClient);
+    }
+    return httpClient;
+}
+
+/**
+    Verify qordoba FAPI response status
+*/
+function isSuccessfulResponse(client: HTTPClient): Boolean {
+    return client.statusCode == 200;
+}
+
+/**
+    Parse qordoba FAPI response
+*/
+function parseResponse(client: HTTPClient): JSON {
+    var message = client.text;
+    return JSON.parse(message);
+}
+
+/**
+    Handle error http response
+*/
+function processFailedResponse(client: HTTPClient) {
+    if (client.statusCode == 400){
+        var errorText = JSON.parse(client.errorText);
+        if (VALIDATION_ERROR.equals(errorText['response']['code']) && errorText['response']['messages'][0].indexOf(COULD_NOT_BE_FOUND) > 0) {
+            throw new qordobaFileNotFoundError();
+        }
+    }
+}

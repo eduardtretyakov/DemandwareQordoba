@@ -1,0 +1,18 @@
+importPackage( dw.system );
+importScript( "/utils/ExceptionLog.ds" );
+
+/**
+    Calculate translation progress
+*/
+function calculateProgress(completedStringsCount: Number, authorizedStringsCount: Number, excludedStringsCount: Number, totalStringsCount: Number):Number {
+    var totalTranslatableStringsCount = completedStringsCount + authorizedStringsCount;
+    if (totalTranslatableStringsCount == 0) {
+        if (excludedStringsCount == totalStringsCount) {
+            return 100;
+        } else {
+            return 0;
+        }
+    } else {
+        return 100 * completedStringsCount/totalTranslatableStringsCount;
+    }
+}

@@ -1,0 +1,23 @@
+/**
+* Fails Qordoba submission on error
+*
+* @input submissionUUID : String
+*
+*/
+importPackage( dw.system );
+importScript( "/utils/ExceptionLog.ds" );
+importScript( "/dao/submission.ds");
+
+var STATUS_COMPLETE: String = "complete";
+var LOGGER : ExceptionLog = new ExceptionLog(Logger.getLogger("qordoba", "updateSubmissionStatus"));
+
+function execute( args : PipelineDictionary ) : Number
+{
+    var submission : CustomObject = getSubmissionByUUID(args.submissionUUID);
+    updateTimeApplied(submission);
+
+    LOGGER.info('Submission completed {0}', submissionToString(submission));
+    setSubmissionStatusComplete(submission);
+
+    return PIPELET_NEXT;
+}

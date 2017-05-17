@@ -1,0 +1,34 @@
+importPackage( dw.system );
+importScript( "dao/configuration.ds" );
+importScript( "/utils/ExceptionLog.ds" );
+
+var QORDOBA_LOCALE : String = "qordoba";
+var CLIENT_LOCALE : String = "demandware";
+
+/**
+    Get qordoba locale by demandware locale
+*/
+function getQordobaLocale(clientLocale: String): String {
+    return getTargetLocaleBySourceLocale(QORDOBA_LOCALE, CLIENT_LOCALE, clientLocale);
+}
+
+/**
+    Get demandware locale by qordoba locale
+*/
+function getClientLocale(qordobaLocale: String): String {
+    return getTargetLocaleBySourceLocale(CLIENT_LOCALE, QORDOBA_LOCALE, qordobaLocale);
+}
+
+/**
+    Get target locale by source locale
+*/
+function getTargetLocaleBySourceLocale(targetLocale: String, sourceLocale: String, localeValue: String) {
+    var localeMapping = getLocaleMapping();
+    for each (var locale : Object in localeMapping) {
+        if (localeValue.equals(locale[sourceLocale])) {
+              return locale[targetLocale];
+        }
+    }
+    // TODO : Raise exception
+    return "";
+}

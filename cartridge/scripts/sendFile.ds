@@ -1,0 +1,464 @@
+/**
+*   @input co : dw.object.CustomObject
+*-   @output ExampleOut : Number
+*
+*/
+importPackage( dw.system );
+importPackage( dw.util );
+importPackage( dw.object );
+importPackage( dw.catalog );
+importPackage( dw.io );
+importPackage( dw.net );
+importPackage( dw.web );
+importPackage( dw.crypto );
+importPackage( dw.content );
+importScript( "helpFunctions.ds" );
+importScript( "service/submissionService.ds");
+importScript( "dao/submission.ds");
+importScript( "/utils/ExceptionLog.ds" );
+
+var qordobaFileApi = require("./file_api/qordobaFileApi.ds");	
+
+var LOGGER : ExceptionLog = new ExceptionLog(Logger.getLogger("qordoba", "sendFile"));
+
+/**
+    Determine which type of object is being considered and branch to approrpriate method to handle.
+*/
+function execute( pdict : PipelineDictionary ) : Number
+{
+    try {
+        var submission : CustomObject = pdict.co;
+        switch (submission.custom['itemType']) {
+            case 'product':
+                sendProduct(submission);
+                break;
+            case 'content':
+                sendContent(submission);
+                break;
+            case 'category':
+                sendCategory(submission);
+                break;
+        }
+    } catch (e) {
+        LOGGER.errorException("sendFile execution failed for submissionId={0}, itemType={1}, itemId={2}", pdict.co.getUUID(), pdict.co.custom['itemType'], pdict.co.custom['itemId'], e);
+        return PIPELET_ERROR;
+    }
+
+   return PIPELET_NEXT;
+}
+
+/**
+    Construct a category custom object for translation as well as submit it to the Qordoba FILE api
+    for inclusion into the translation workflow.
+
+    Handle all errors and update the custom object with error states and/or complete status.
+*/
+function sendCategory(submission : CustomObject) : Boolean
+{
+    LOGGER.error("Sending submission {0}", submissionToString(submission));
+    var fileReader : FileReader = null;
+    try {
+        var qordobaConfigurationJson : JSON = getConfiguration();
+        var categoryAttributeJson : JSON = JSON.parse(qordobaConfigurationJson['category_attribute_json']);
+        var category : Category = CatalogMgr.getCategory(submission.custom['itemId']);
+                
+        var file : File = createFile('json', submission.custom['fileUri']);
+        if (file.createNewFile()) {
+        	
+            var fileWriter : FileWriter = new FileWriter(file, "UTF-8");
+			var jsonSubmission : Object = new Object();
+			jsonSubmission['category'] = [];
+			
+			var jsonCat = {};
+			jsonCat['id'] = submission.custom['itemId'];
+
+		    for each (var attribute : HashMap in categoryAttributeJson['category_attribute']) {
+		        switch (attribute['type']) {
+		            case "set-of-string" : 
+		                var setsString : String = "";
+		                if (attribute['custom'] == 'true') {
+		                    for each (var setString : String in category.custom[attribute['id']]) {
+		                        setsString += setString + ";";
+		                    }
+		                } else {
+		                    for each (var setString : String in category[attribute['id']]) {
+		                        setsString += setString + ";";
+		                    }
+		                }
+		                jsonCat[attribute['id']] =  setsString;
+		                break;
+		            
+		            default: 
+		                if (attribute['custom'] == 'true') {
+		                    jsonCat[attribute['id']] = category.custom[attribute['id']];
+		                } else {
+		                    jsonCat[attribute['id']] = category[attribute['id']];
+		                }
+		                break;                                
+		        }
+		    }
+		    jsonSubmission['category'].push(jsonCat);
+			fileWriter.writeLine(JSON.stringify(jsonSubmission));
+            fileWriter.close();
+        }
+
+        var delimiter : String = getDelimiter();
+        fileReader = new FileReader(file, "UTF-8");
+        var fileString = fileReader.getString();
+        
+	    var auth : HTTPClient = qordobaFileApi.checkConnection(qordobaConfigurationJson['api_url'], 
+	    	qordobaConfigurationJson['login'],
+	     	qordobaConfigurationJson['password']);
+		
+		var authResp = JSON.parse(auth.text);
+		var authToken : String = '';
+		if(authResp['result'] && authResp['result'] == 'success') {
+			authToken = authResp['token'];
+		} 		       
+        
+        var request : String = getContentDisposition('user_key', authToken, delimiter);
+        request += getContentDisposition('file_names', JSON.stringify([]), delimiter);
+
+        request += "--" + delimiter + "\r\n";
+        request += 'Content-Disposition: form-data; name="file"';
+        request += '; filename="' + file.getName() + '"' + "\r\n";
+        request += "Content-Type: application/octet-stream\r\n";
+        request += "\r\n";
+        request += fileString + "\r\n";
+        request += "--" + delimiter + "--\r\n";
+
+        var sendUrl = qordobaConfigurationJson['api_url'] + "organizations/" + qordobaConfigurationJson['organization_id'] + "/upload/uploadFile_anyType?project_id=" + qordobaConfigurationJson['project_id'] + "&content_type_code=JSON";
+        
+        var httpClient : HTTPClient = getHttpClient(delimiter, sendUrl, 'POST', request.length);
+        httpClient.setRequestHeader('X-AUTH-TOKEN', authToken);
+		        
+        httpClient.send(request);
+        
+        if (httpClient.statusCode == 200) {
+            var message = httpClient.text;
+            var messageJson : JSON = JSON.parse(message);
+            LOGGER.error("File has been sent successfully submission {0}", submissionToString(submission));
+        } else {
+            submission.custom['status'] = 'failed';
+            LOGGER.error("Failed to send category: statusCode={0}, message={1}", httpClient.statusCode, httpClient.errorText);
+            LOGGER.error("File content: \n{0}", fileString);
+            LOGGER.error("Request: \n{0}", request);
+            LOGGER.error("URL: \n{0}", sendUrl);
+            return;
+        }
+
+			        
+        //Appending file to project
+        var appendUrl = qordobaConfigurationJson['api_url'] + "projects/" + qordobaConfigurationJson['project_id'] + "/append_files";
+        
+        var httpClient : HTTPClient = getHttpClient(delimiter, appendUrl, 'POST', request.length);
+        
+	    httpClient.setRequestHeader('X-AUTH-TOKEN', authToken);
+        httpClient.setRequestHeader('Content-Type', 'application/json');
+        
+        submission.custom['qordobaUploadId'] = messageJson.upload_id;
+        var request = [{
+        	"source_columns":[],
+        	"file_name": messageJson.file_name,
+        	"version_tag":"New",
+        	"id": messageJson.upload_id
+        }]; 
+        
+        httpClient.send(JSON.stringify(request));
+        
+        if (httpClient.statusCode == 200) {
+            var message = httpClient.text;
+            var messageJson : JSON = JSON.parse(message);
+            submission.custom['status'] = 'in progress';
+	        submission.custom['qordobaFileId'] = messageJson.files_ids.pop();
+            
+            LOGGER.error("File has been assigned successfully submission {0}", submissionToString(submission));
+        } else {
+            submission.custom['status'] = 'failed';
+            LOGGER.error("Failed to assign category: statusCode={0}, message={1}", httpClient.statusCode, httpClient.errorText);
+            LOGGER.error("File content: \n{0}", fileString);
+            LOGGER.error("Request: \n{0}", request);
+            LOGGER.error("URL: \n{0}", appendUrl);
+            return;
+        }        
+    } catch (e) {
+        LOGGER.errorException("Sending category failed - submissionId={0}, categoryId={1}", submission.getUUID(), submission.custom['itemId'], e);
+    } finally {
+         fileReader.close();
+    }
+}
+
+/**
+    Construct a CONTENT custom object for translation as well as submit it to the Qordoba FILE api
+    for inclusion into the translation workflow.
+
+    Handle all errors and update the custom object with error states and/or complete status.
+*/
+function sendContent(submission : CustomObject) : Boolean
+{
+    LOGGER.error("Sending submission {0}", submissionToString(submission));
+    var fileReader : FileReader = null;
+    try {
+        var qordobaConfigurationJson : JSON = getConfiguration();
+        var contentAttributeJson : JSON = JSON.parse(qordobaConfigurationJson['content_attribute_json']);
+        var content : Content = ContentMgr.getContent(submission.custom['itemId']);
+                
+        var file : File = createFile('json', submission.custom['fileUri']);
+        if (file.createNewFile()) {
+        	
+            var fileWriter : FileWriter = new FileWriter(file, "UTF-8");
+			var jsonSubmission : Object = new Object();
+			jsonSubmission['content'] = [];
+			
+			var jsonCat = {};
+			jsonCat['id'] = submission.custom['itemId'];
+
+		    for each (var attribute : HashMap in contentAttributeJson['content_attribute']) {
+		        switch (attribute['type']) {
+		            case "set-of-string" : 
+		                var setsString : String = "";
+		                if (attribute['custom'] == 'true') {
+		                    for each (var setString : String in content.custom[attribute['id']]) {
+		                        setsString += setString + ";";
+		                    }
+		                } else {
+		                    for each (var setString : String in content[attribute['id']]) {
+		                        setsString += setString + ";";
+		                    }
+		                }
+		                jsonCat[attribute['id']] =  setsString;
+		                break;
+		            
+		            default: 
+		                if (attribute['custom'] == 'true') {
+		                    jsonCat[attribute['id']] = content.custom[attribute['id']];
+		                } else {
+		                    jsonCat[attribute['id']] = content[attribute['id']];
+		                }
+		                break;                                
+		        }
+		    }
+		    jsonSubmission['content'].push(jsonCat);
+			fileWriter.writeLine(JSON.stringify(jsonSubmission));
+            fileWriter.close();
+        }
+
+        var delimiter : String = getDelimiter();
+        fileReader = new FileReader(file, "UTF-8");
+        var fileString = fileReader.getString();
+        
+	    var auth : HTTPClient = qordobaFileApi.checkConnection(qordobaConfigurationJson['api_url'], 
+	    	qordobaConfigurationJson['login'],
+	     	qordobaConfigurationJson['password']);
+		
+		var authResp = JSON.parse(auth.text);
+		var authToken : String = '';
+		if(authResp['result'] && authResp['result'] == 'success') {
+			authToken = authResp['token'];
+		} 		       
+        
+        var request : String = getContentDisposition('user_key', authToken, delimiter);
+        request += getContentDisposition('file_names', JSON.stringify([]), delimiter);
+
+        request += "--" + delimiter + "\r\n";
+        request += 'Content-Disposition: form-data; name="file"';
+        request += '; filename="' + file.getName() + '"' + "\r\n";
+        request += "Content-Type: application/octet-stream\r\n";
+        request += "\r\n";
+        request += fileString + "\r\n";
+        request += "--" + delimiter + "--\r\n";
+
+        var sendUrl = qordobaConfigurationJson['api_url'] + "organizations/" + qordobaConfigurationJson['organization_id'] + "/upload/uploadFile_anyType?project_id=" + qordobaConfigurationJson['project_id'] + "&content_type_code=JSON";
+        
+        var httpClient : HTTPClient = getHttpClient(delimiter, sendUrl, 'POST', request.length);
+        httpClient.setRequestHeader('X-AUTH-TOKEN', authToken);
+		        
+        httpClient.send(request);
+        
+        if (httpClient.statusCode == 200) {
+            var message = httpClient.text;
+            var messageJson : JSON = JSON.parse(message);
+            LOGGER.error("File has been sent successfully submission {0}", submissionToString(submission));
+        } else {
+            submission.custom['status'] = 'failed';
+            LOGGER.error("Failed to send content: statusCode={0}, message={1}", httpClient.statusCode, httpClient.errorText);
+            LOGGER.error("File content: \n{0}", fileString);
+            LOGGER.error("Request: \n{0}", request);
+            LOGGER.error("URL: \n{0}", sendUrl);
+            return;
+        }
+
+			        
+        //Appending file to project
+        var appendUrl = qordobaConfigurationJson['api_url'] + "projects/" + qordobaConfigurationJson['project_id'] + "/append_files";
+        
+        var httpClient : HTTPClient = getHttpClient(delimiter, appendUrl, 'POST', request.length);
+        
+	    httpClient.setRequestHeader('X-AUTH-TOKEN', authToken);
+        httpClient.setRequestHeader('Content-Type', 'application/json');
+        
+        submission.custom['qordobaUploadId'] = messageJson.upload_id;
+        var request = [{
+        	"source_columns":[],
+        	"file_name": messageJson.file_name,
+        	"version_tag":"New",
+        	"id": messageJson.upload_id
+        }]; 
+        
+        httpClient.send(JSON.stringify(request));
+        
+        if (httpClient.statusCode == 200) {
+            var message = httpClient.text;
+            var messageJson : JSON = JSON.parse(message);
+            submission.custom['status'] = 'in progress';
+	        submission.custom['qordobaFileId'] = messageJson.files_ids.pop();
+            
+            LOGGER.error("File has been assigned successfully submission {0}", submissionToString(submission));
+        } else {
+            submission.custom['status'] = 'failed';
+            LOGGER.error("Failed to assign content: statusCode={0}, message={1}", httpClient.statusCode, httpClient.errorText);
+            LOGGER.error("File content: \n{0}", fileString);
+            LOGGER.error("Request: \n{0}", request);
+            LOGGER.error("URL: \n{0}", appendUrl);
+            return;
+        }        
+    } catch (e) {
+        LOGGER.errorException("Sending content failed - submissionId={0}, contentId={1}", submission.getUUID(), submission.custom['itemId'], e);
+    } finally {
+         fileReader.close();
+    }
+}
+
+
+/**
+    Construct a PRODUCT custom object for translation as well as submit it to the Qordoba FILE api
+    for inclusion into the translation workflow.
+
+    Handle all errors and update the custom object with error states and/or complete status.
+*/
+function sendProduct(submission : CustomObject) : Boolean
+{
+    LOGGER.info("Sending submission {0}", submissionToString(submission));
+    var fileReader : FileReader = null;
+    try {
+        var qordobaConfigurationJson : JSON = getConfiguration();
+        var productAttributeJson : JSON = JSON.parse(qordobaConfigurationJson['product_attribute_json']);
+        var product : Product = ProductMgr.getProduct(submission.custom['itemId']);
+        var file : File = createFile(submission.custom['itemType'], submission.custom['fileUri']);
+        if (file.createNewFile()) {
+            var fileWriter : FileWriter = new FileWriter(file, "UTF-8");
+            var xsw : XMLStreamWriter = new XMLIndentingStreamWriter(fileWriter);
+            xsw.writeStartDocument("utf-8", "1.0");
+                xsw.writeComment("qordoba.translate_paths = data/product/content, data/product/contentHtml");
+                xsw.writeComment("qordoba.string_format_paths = html :  data/product/contentHtml");
+                xsw.writeStartElement("data");
+                    xsw.writeStartElement("product");
+                    xsw.writeAttribute("id", submission.custom['itemId']);
+                        for each (var attribute : HashMap in productAttributeJson['product_attribute']) {
+                            switch (attribute['type']) {
+                                case "html" :
+                                    if (attribute['custom'] == 'true') {
+                                        getXMLElement(xsw, "contentHtml", attribute['id'], product.custom[attribute['id']]);
+                                    } else {
+                                        getXMLElement(xsw, "contentHtml", attribute['id'], product[attribute['id']]);
+                                    }
+                                    break;
+
+                                case "string" :
+                                    if (attribute['custom'] == 'true') {
+                                        getXMLElement(xsw, "content", attribute['id'], product.custom[attribute['id']]);
+                                    } else {
+                                        getXMLElement(xsw, "content", attribute['id'], product[attribute['id']]);
+                                    }
+                                    break;
+
+                                case "enum-of-string" :
+                                    if (attribute['custom'] == 'true') {
+                                        getXMLElement(xsw, "content", attribute['id'], product.custom[attribute['id']]);
+                                    } else {
+                                        getXMLElement(xsw, "content", attribute['id'], product[attribute['id']]);
+                                    }
+                                    break;
+
+                                case "set-of-string" :
+                                    var setsString : String = "";
+                                    if (attribute['custom'] == 'true') {
+                                        for each (var setString : String in product.custom[attribute['id']]) {
+                                            setsString += setString + ";";
+                                        }
+                                    } else {
+                                        for each (var setString : String in product[attribute['id']]) {
+                                            setsString += setString + ";";
+                                        }
+                                    }
+                                    getXMLElement(xsw, "content", attribute['id'], setsString);
+                                    break;
+                            }
+                        }
+                    xsw.writeEndElement();
+                xsw.writeEndElement();
+             xsw.writeEndDocument();
+             xsw.flush();
+             xsw.close();
+             fileWriter.close();
+        }
+
+        var delimiter : String = getDelimiter();
+        var qordobaConfigurationJson : JSON = getConfiguration();
+        fileReader  = new FileReader(file, "UTF-8");
+        var fileString = fileReader.getString();
+        var request : String = getContentDisposition('apiKey', qordobaConfigurationJson['api_key'], delimiter);
+        request += getContentDisposition('projectId', qordobaConfigurationJson['project_id'], delimiter);
+        request += getContentDisposition('fileType', 'xml', delimiter);
+        request += getContentDisposition('fileUri', file.getName(), delimiter);
+        request += getContentDisposition('callbackUrl', createCallBackUrl(file.getName()), delimiter);
+
+        request += getContentDisposition('approved', 'false', delimiter);
+
+        var autoAuthorize : JSON = JSON.parse(qordobaConfigurationJson['auto_authorize_content']);
+
+        if(autoAuthorize){
+            request += getContentDisposition('overwriteApprovedLocales', 'false', delimiter);
+
+            var targetLocale : JSON = JSON	.parse(qordobaConfigurationJson['target_locale']);
+
+            for each (var locale : Object in targetLocale['target_locale']) {
+                if (locale['demandware'] == submission.custom['locale']) {
+                    request += getContentDisposition('localesToApprove[0]', locale['qordoba'], delimiter);
+                    break;
+                }
+            }
+        }
+
+        request += "--" + delimiter + "\r\n";
+        request += 'Content-Disposition: form-data; name="file"';
+        request += '; filename="file"' + "\r\n";
+        request += "Content-Type: xml\r\n";
+        request += "\r\n";
+        request += fileString + "\r\n";
+        request += "--" + delimiter + "--\r\n";
+
+        LOGGER.info('Sending product: productId={0}, method=POST, URL="{1}", fileName="{2}", submissionLocale={3}', product.ID, qordobaConfigurationJson['api_url'] + '/file/upload', file.getName(), submission.custom['locale']);
+        LOGGER.debug("File content to send: \n{0}", fileString);
+
+        var httpClient : HTTPClient = getHttpClient(delimiter, qordobaConfigurationJson['api_url'] + '/file/upload', 'POST', request.length);
+        // Add 10 seconds to whatever the Qordoba timeout is configured to (to better support large file uploads).
+        httpClient.setTimeout(httpClient.getTimeout() + 10000);
+        httpClient.send(request);
+        if (httpClient.statusCode == 200) {
+            var message = httpClient.text;
+            var messageJson : JSON = JSON.parse(message);
+            submission.custom['wordsSubmitted'] = messageJson['response']['data']['wordCount'];
+            submission.custom['status'] = 'in progress';
+            LOGGER.info("File has been sent successfully submission {0}", submissionToString(submission));
+        } else {
+            submission.custom['status'] = 'failed';
+            LOGGER.error("Failed to send product: statusCode={0}, message={1}", httpClient.statusCode, httpClient.errorText);
+            LOGGER.error("File content: \n{0}", fileString);
+        }
+    } catch (e) {
+        LOGGER.errorException("Sending product failed - submissionId={0}, productId={1}", submission.getUUID(), submission.custom['itemId'], e);
+    } finally {
+         fileReader.close();
+    }
+}

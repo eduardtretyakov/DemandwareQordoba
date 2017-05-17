@@ -1,0 +1,66 @@
+/**
+*   Script to write the configuration to the qordoba preferences permanently
+*
+*   @input requestParameter : Object
+*-   @output ExampleOut : Number
+*
+*/
+importPackage( dw.system );
+importScript( "/utils/ExceptionLog.ds" );
+
+var LOGGER : ExceptionLog = new ExceptionLog(Logger.getLogger("qordoba", "saveConfiguration"));
+
+/**
+    Write the configuration to the qordoba preferences permanently
+*/
+function execute( pdict : PipelineDictionary ) : Number
+{
+    try {
+        var qordobaConfig : Object = new Object();
+        if (pdict.requestParameter['api_url'].stringValue != '') {
+            qordobaConfig['api_url'] = pdict.requestParameter['api_url'].stringValue;
+        } else {
+            qordobaConfig['api_url'] = 'https://app.qordoba.com/api/';
+        }
+        qordobaConfig['project_id'] = pdict.requestParameter['project_id'].stringValue;
+        qordobaConfig['organization_id'] = pdict.requestParameter['organization_id'].stringValue;
+        qordobaConfig['login'] = pdict.requestParameter['login'].stringValue;
+        qordobaConfig['password'] = pdict.requestParameter['password'].stringValue;
+
+        if (pdict.requestParameter['time_out'].stringValue != '') {
+            qordobaConfig['time_out'] = pdict.requestParameter['time_out'].stringValue;
+        } else {
+            qordobaConfig['time_out'] = 10000;
+        }
+
+        qordobaConfig['retrival_type'] = pdict.requestParameter['retrival_type'].stringValue;
+        qordobaConfig['source_locale'] = pdict.requestParameter['source_locale'].stringValue;
+        if (pdict.requestParameter['auto_authorize_content'].stringValue != null) {
+            qordobaConfig['auto_authorize_content'] = pdict.requestParameter['auto_authorize_content'].stringValue;
+        }else {
+            qordobaConfig['auto_authorize_content'] = false;
+        }
+        qordobaConfig['target_locale'] = pdict.requestParameter['target_locale'].stringValue;
+        qordobaConfig['product_attribute_json'] = pdict.requestParameter['product_attribute_json'].stringValue;
+        qordobaConfig['content_attribute_json'] = pdict.requestParameter['content_attribute_json'].stringValue;
+        qordobaConfig['category_attribute_json'] = pdict.requestParameter['category_attribute_json'].stringValue;
+
+        if (pdict.requestParameter['catalog_ids'].stringValue != '') {
+            qordobaConfig['catalog_ids'] = pdict.requestParameter['catalog_ids'].stringValue;
+        } else {
+            qordobaConfig['catalog_ids'] = "apparel-catalog, electronics-catalog";
+        }
+        qordobaConfig['library_type'] = pdict.requestParameter['library_type'].stringValue;
+        qordobaConfig['token_salt'] = pdict.requestParameter['token_salt'].stringValue;
+
+        var sitePrefs : SitePreferences = dw.system.Site.getCurrent().getPreferences();
+        sitePrefs.custom['qordoba_configuration_data'] = JSON.stringify(qordobaConfig);
+        
+		LOGGER.errorException("Config object: " +  JSON.stringify(qordobaConfig));
+     } catch (e) {
+        LOGGER.errorException("saveConfiguration execution failed, requestParameter={0}", pdict.requestParameter, e);
+        return PIPELET_ERROR;
+    }
+
+   return PIPELET_NEXT;
+}

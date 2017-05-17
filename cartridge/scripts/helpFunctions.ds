@@ -1,0 +1,255 @@
+importPackage( dw.system );
+importPackage( dw.util );
+importPackage( dw.object );
+importPackage( dw.catalog );
+importPackage( dw.io );
+importPackage( dw.net );
+importPackage( dw.web );
+importPackage( dw.crypto );
+importPackage( dw.content );
+importScript( "submitItem.ds" );
+importScript( "/utils/ExceptionLog.ds" );
+
+var LOGGER : ExceptionLog = new ExceptionLog(Logger.getLogger("qordoba", "helpFunctions"));
+var version = require("./version");
+
+/**
+    Resubmit a custom object into the translation workflow.
+*/
+function resend(itemId : String, languages : ArrayList, submitter : String, type : String) : Boolean
+{
+    try {
+        var qordobaConfigurationJson : JSON = getConfiguration();
+        var targetLocale : JSON = JSON .parse(qordobaConfigurationJson['target_locale']);
+
+        switch (type) {
+             case 'product' :
+                var product : Product = ProductMgr.getProduct(itemId);
+                for each (var language : String in languages) {
+                    var submission : CustomObject = issetSubmission(itemId, language);
+                    if (!submission) {
+                        var submission : CustomObject = CustomObjectMgr.createCustomObject('QORDOBA_SUBMISSION', UUIDUtils.createUUID());
+                    }
+                    submitProduct(submission, product, submitter, language);
+                }
+                break;
+
+            case 'content' :
+                var content : Content = ContentMgr.getContent(itemId);
+                for each (var language : String in languages) {
+                    var submission : CustomObject = issetSubmission(itemId, language);
+                    if (!submission) {
+                        var submission : CustomObject = CustomObjectMgr.createCustomObject('QORDOBA_SUBMISSION', UUIDUtils.createUUID());
+                    }
+                    submitContent(submission, content, submitter, language);
+                }
+                break;
+
+            case 'category' :
+                var category : Category = CatalogMgr.getCategory(itemId);
+                for each (var language : String in languages) {
+                    var submission : CustomObject = issetSubmission(itemId, language);
+                    if (!submission) {
+                        var submission : CustomObject = CustomObjectMgr.createCustomObject('QORDOBA_SUBMISSION', UUIDUtils.createUUID());
+                    }
+                    submitCategory(submission, category, submitter, language);
+                }
+                break;
+         }
+    } catch (e) {
+        LOGGER.errorException('Resend translation failed for itemId={0}, languages="{1}", submitter="{2}", type="{3}"', itemId, languages, submitter, type, e);
+        return false;
+    }
+
+    return true;
+}
+
+/**
+    Utility method to get a configured HTTP client with timeouts.
+*/
+function getHttpClient(delimiter : String, url : String, protocol : String, length : String) : HTTPClient
+{
+    try {
+        var qordobaConfigurationJson : JSON = getConfiguration();
+        var httpClient : HTTPClient = new HTTPClient();
+        httpClient.setRequestHeader('Content-Type', "multipart/form-data; boundary=" + delimiter);
+        httpClient.open(protocol, url);
+        httpClient.setRequestHeader("User-Agent", "demandware-connector/" + version.getVersion());
+        httpClient.setTimeout(qordobaConfigurationJson['time_out']);
+        return httpClient;
+    } catch (e) {
+        LOGGER.errorException('Failed creating HTTPClient for delimiter="{0}", url="{1}", protocol="{2}", length="{3}"', delimiter, url, protocol, length, e);
+        throw new Error(e);
+    }
+}
+
+/**
+    Convienence method to build the content disposition header
+*/
+function getContentDisposition(name : String, value : String, delimiter : String) : String
+{
+    var request : String = "--" + delimiter + "\r\n";
+    request += 'Content-Disposition: form-data; name="' + name + '"';
+    request += "\r\n\r\n";
+    request += value + "\r\n";
+    return request;
+}
+
+/**
+    Convenience method to read the cartridge configuraiton data.
+*/
+function getConfiguration() : JSON
+{
+    try {
+        var sitePrefs : SitePreferences = Site.getCurrent().getPreferences();
+        var qordobaConfiguration : String = sitePrefs.custom['qordoba_configuration_data'];
+        var qordobaConfigurationJson : JSON = JSON.parse(qordobaConfiguration);
+        return qordobaConfigurationJson;
+    } catch (e) {
+        LOGGER.errorException("Loading configuration failed", e);
+        throw new Error(e);
+    }
+}
+
+/**
+    Convenience method for creating a file
+*/
+function createFile(type : String, fileName : String) : File
+{
+    try {
+        var file : File = new File(File.IMPEX + File.SEPARATOR + 'qordoba' + File.SEPARATOR + type +  File.SEPARATOR +'upload' + File.SEPARATOR);
+        if (!file.isDirectory()) {
+            file.mkdirs();
+        }
+        var file : File = new File(File.IMPEX + File.SEPARATOR + 'qordoba' + File.SEPARATOR + type + File.SEPARATOR + 'upload' + File.SEPARATOR + fileName);
+        if (file.exists()) {
+            file.remove();
+        }
+        return file;
+    } catch (e) {
+        LOGGER.errorException('Create file failed, type="{0}", fileName="{1}"', type, fileName, e);
+        throw new Error(e);
+    }
+}
+
+/**
+    Convenience method for mime separator
+*/
+function getDelimiter() : String
+{
+    var delimiter : String = '-------------';
+    var random : SecureRandom = new SecureRandom();
+    for (var i = 0; i < 10; i++) {
+        var next : Number = random.nextInt(10);
+        delimiter += next.toString();
+    }
+    return delimiter;
+}
+
+/**
+    Convenience method to create a XML attribute
+*/
+function getXMLElement(xsw : XMLStreamWriter, elementName : String, attributeName : String, value : String)
+{
+    try {
+        xsw.writeStartElement(elementName);
+        xsw.writeAttribute("attribute", attributeName);
+            if (value == null) {
+                xsw.writeCData('');
+            } else {
+                xsw.writeCData(value);
+            }
+        xsw.writeEndElement();
+    } catch (e) {
+        LOGGER.errorException('Creating XML element failed, elementName="{0}", attributeName="{1}", value="{2}"', elementName, attributeName, value, e);
+        throw new Error(e);
+    }
+}
+
+
+/**
+    Convenience method to reset a CO back to it's new state.
+*/
+function issetSubmission(itemId : String) : CustomObject
+{
+    try {
+        var submission : CustomObject = CustomObjectMgr.queryCustomObject('QORDOBA_SUBMISSION', "custom.itemId = '" + itemId + "'", null );
+
+        if (submission != null) {
+            if (submission.getCustom()['status'] == "in progress") {
+                submission.getCustom()['status'] == "new";
+            }
+        }
+        return submission;
+    } catch (e) {
+        LOGGER.errorException('Failed reset submission for itemId={0}', itemId, e);
+        throw new Error(e);
+    }
+}
+
+/**
+*   Generating token for input params using secret salt
+*/
+function generateToken(sourceString : String) : String
+{
+    var qordobaConfigurationJson : JSON = getConfiguration();
+    var salt : String = qordobaConfigurationJson["tokenSalt"];
+    var phrase : String = sourceString + ":" + salt;
+    var digest : MessageDigest = new MessageDigest("MD5");
+    var token : String = Encoding.toHex(digest.digestBytes(new Bytes(phrase, "UTF-8")));
+
+    return token;
+}
+
+/**
+*   Generates callback service URI
+*/
+function createCallBackUrl(fileUri : String) : String
+{
+    var token : String = generateToken(fileUri);
+    var callbackUrl : String = "https://" + Site.current.httpsHostName + "/on/demandware.store/Sites-" + Site.current.getID() + "-Site/default/CallBackService-Start?token=" + token;
+    LOGGER.debug('Generated callbackUrl="{0}"', callbackUrl);
+    return callbackUrl;
+}
+
+/**
+    Get demandware locale by qordoba locale
+*/
+// TODO : Duplicate
+function getDemandwareLocale(qordobaLocale : String) : String
+{
+    var qordobaConfigurationJson : JSON = getConfiguration();
+    var targetLocale : JSON = JSON.parse(qordobaConfigurationJson['target_locale']);
+    for each (var locale : Object in targetLocale['target_locale'])
+    {
+        if (locale['qordoba'] == qordobaLocale)
+        {
+            return locale['demandware'] ;
+        }
+    }
+    return "";
+}
+
+/**
+    Get all target locales
+*/
+function getTargetLocalesList() : List
+{
+    var qordobaConfigurationJson : JSON = getConfiguration();
+    var targetLocale : JSON = JSON.parse(qordobaConfigurationJson['target_locale']);
+
+    var list : ArrayList = new ArrayList;
+    for each (var locale : Object in targetLocale['target_locale']) {
+        var localeData : ArrayList =  new ArrayList;
+        localeData.addAt(0, locale['demandware']);
+        if (locale['demandware'] == "default") {
+            localeData.addAt(1, "default");
+        } else {
+            var language : CustomObject = CustomObjectMgr.queryCustomObject("QORDOBA_LOCALES", "custom.ID = '" + locale['demandware'] + "'");
+            localeData.addAt(1, language.getCustom()['name']);
+        }
+        list.push(localeData);
+    }
+
+    return list;
+}

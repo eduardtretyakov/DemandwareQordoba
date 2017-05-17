@@ -1,0 +1,247 @@
+/**
+*   @input uuid : String
+*   @input itemId : String
+*   @input locale : String
+*   @output type : String
+*   @output path : Array
+*   @output submissionUUID : String
+*/
+
+importPackage( dw.system );
+importPackage( dw.object );
+importPackage( dw.net );
+importPackage( dw.util );
+importPackage( dw.crypto );
+importScript( "/helpFunctions.ds" );
+importScript( "/downloads.ds" );
+importScript( "/dao/submission.ds");
+importScript( "/utils/ExceptionLog.ds" );
+importScript( "/service/localeService.ds" )
+
+var LOGGER : ExceptionLog = new ExceptionLog(Logger.getLogger("qordoba", "submissionBoard.download"));
+var version = require("~/cartridge/scripts/version");
+var qordobaFileApi = require("~/cartridge/scripts/file_api/qordobaFileApi.ds");	
+/**
+    Check the qordoba file API for all completed translations (via querying custom objects) and download any completed files.
+*/
+function execute( pdict : PipelineDictionary ) : Number
+{
+    LOGGER.error("Download flow is called");
+
+    try {
+        var date : Date = new Date();
+
+        var submission : CustomObject;
+        if (pdict.uuid != null) {
+            LOGGER.error("Searching submission by uuid={0}", pdict.uuid);
+            submission = CustomObjectMgr.queryCustomObject('QORDOBA_SUBMISSION', "UUID = '" + pdict.uuid + "'", null );
+        } else {
+            LOGGER.error("Searching submisison by itemId={0}", pdict.itemId, pdict.locale);
+            submission = CustomObjectMgr.queryCustomObject('QORDOBA_SUBMISSION', "custom.itemId = '" + pdict.itemId + "'", null );
+        }
+
+        if (empty(submission)) {
+            throw "Submission is not found";
+        }
+		
+		LOGGER.error("Submission {0}", submission);
+        pdict.submissionUUID = submission.UUID;
+
+        var qordobaConfigurationJson : JSON = getConfiguration();    	
+        var submission : CustomObject = getSubmissionByUUID(pdict.uuid);
+
+	    var auth : HTTPClient = qordobaFileApi.checkConnection(qordobaConfigurationJson['api_url'], 
+	    	qordobaConfigurationJson['login'],
+	     	qordobaConfigurationJson['password']);
+		
+		var authResp = JSON.parse(auth.text);
+		var authToken : String = '';
+		if(authResp['result'] && authResp['result'] == 'success') {
+			authToken = authResp['token'];
+		} else {
+            LOGGER.error('AUTH FAILED');
+			return PIPELET_ERROR;
+		} 		                  
+		
+		LOGGER.error("Retrieving project data");
+		
+		//https://app.qordoba.com/api/projects/3693		
+		//-----------------------------------
+        var httpClient : HTTPClient = new HTTPClient();
+        httpClient.setTimeout(qordobaConfigurationJson['time_out']); 
+        httpClient.open('GET', qordobaConfigurationJson['api_url'] + 'projects/' + qordobaConfigurationJson['project_id']);
+        httpClient.setRequestHeader("User-Agent", "demandware-connector/" + version.getVersion());
+        httpClient.setRequestHeader('X-AUTH-TOKEN', authToken);
+        httpClient.send(request);
+        
+        if (httpClient.statusCode == 200) { 
+			LOGGER.error("project data retrieved {0}, {1}", qordobaConfigurationJson['api_url'] + 'projects/' + qordobaConfigurationJson['projectId'], httpClient.text);
+			var projectData : Object = JSON.parse(httpClient.text);
+        } else {
+            LOGGER.error('retrieving project data failed: URL={0}, statusCode={1}, errorText="{2}"', qordobaConfigurationJson['api_url'] + 'projects/' + qordobaConfigurationJson['projectId'], httpClient.statusCode, httpClient.errorText);
+            return PIPELET_ERROR;
+        }
+		
+		var localeUrl : String = "";
+		var langId : Number = null;
+		var langObj : Number = {};
+		
+        var delimiter : String = getDelimiter();
+        var request : String = '{"status": ["completed"]}';				
+		var checkNumber = 100 / submission.custom['qordobaLocale'].length;
+		var downloadedLocales : Object = {};
+		var progress : Number = 0;
+		
+		for(var lang in submission.custom['qordobaLocale']) {
+			for(var remoteLang in projectData.project['target_languages']) {
+				if(projectData.project['target_languages'][remoteLang].code == submission.custom['qordobaLocale'][lang]) {
+					langId = projectData.project['target_languages'][remoteLang].id;
+					langObj = projectData.project['target_languages'][remoteLang]; 
+					break; 
+				}
+			}	
+			
+			if(langId == null) {
+                LOGGER.error('Remote Locale not found: {0}', submission.custom['qordobaLocale'][lang]);
+                continue;				
+			}			
+									
+			localeUrl = qordobaConfigurationJson['api_url'] + 'projects/' +
+			qordobaConfigurationJson['project_id'] + '/languages/' + 
+			langId + '/page_settings/search?limit=50&offset=0';
+			
+            LOGGER.error('Locale check: {0}', localeUrl);                
+            
+			//https://app.qordoba.com/api/projects/3693/languages/234/page_settings/search?limit=50&offset=0
+			//body:{"status": ["completed"]}
+			//-----------------------------------
+    		var httpClient : HTTPClient = getHttpClient(delimiter, request , request.length);
+            httpClient.setTimeout(qordobaConfigurationJson['time_out']); 
+            httpClient.open('POST',localeUrl);
+            
+            httpClient.setRequestHeader("User-Agent", "demandware-connector/" + version.getVersion());
+	        httpClient.setRequestHeader('Content-Type', 'application/json');
+	        httpClient.setRequestHeader('X-AUTH-TOKEN', authToken);
+            httpClient.send(request); 
+            
+            if (httpClient.statusCode == 200) { 
+				var langPages : Object = JSON.parse(httpClient.text);
+				downloadedLocales[langId] = langPages;
+				downloadedLocales[langId]['localeData'] = langObj;
+				LOGGER.error("Page Search data retrieved {0}, {1}, {2}, {3}", localeUrl, httpClient.text, langPages.pages.length, progress);
+            } else {
+                LOGGER.error('retrieving Search data failed: URL={0}, statusCode={1}, errorText="{2}"', localeUrl, httpClient.statusCode, httpClient.errorText);
+                return PIPELET_ERROR;
+            }
+            langId = null;
+            langObj = {};
+		}		
+	
+		for(var locale in downloadedLocales) {
+			if(downloadedLocales[locale].pages.length > 0) {
+				for(var page in downloadedLocales[locale].pages) {
+					if(downloadedLocales[locale].pages[page].url == submission.custom['fileUri']) {
+				        var httpClient : HTTPClient = new HTTPClient();
+				        var pageUrl = qordobaConfigurationJson['api_url'] + 
+				        	'projects/' + qordobaConfigurationJson['project_id'] + '/' + 
+				        	'languages/' + downloadedLocales[locale].localeData['id'] + '/' +  
+				        	'pages/' + downloadedLocales[locale].pages[page].page_id;
+				        httpClient.setTimeout(qordobaConfigurationJson['time_out']); 
+				        httpClient.open('GET', pageUrl);
+				        httpClient.setRequestHeader("User-Agent", "demandware-connector/" + version.getVersion());
+				        httpClient.setRequestHeader('X-AUTH-TOKEN', authToken);
+				        httpClient.send(request);	
+				        
+				        if (httpClient.statusCode == 200) { 
+							LOGGER.error("PAGE data retrieved {0}, {1}", pageUrl, httpClient.text);
+							var pageData = JSON.parse(httpClient.text);
+				        } else {
+				            LOGGER.error('retrieving PAGE data failed: URL={0}, statusCode={1}, errorText="{2}"', pageUrl, httpClient.statusCode, httpClient.errorText);
+				            return PIPELET_ERROR;
+				        }
+						LOGGER.error("--3");
+				        
+				        var httpClient : HTTPClient = new HTTPClient();
+				        var pageUrl = qordobaConfigurationJson['api_url'] + 
+				        	'projects/' + qordobaConfigurationJson['project_id'] + '/' + 
+				        	'languages/' + downloadedLocales[locale].localeData['id'] + '/' +  
+				        	'pages/' + downloadedLocales[locale].pages[page].page_id + "/" + 
+				        	'segments/milestones/-100/export';
+				        httpClient.setTimeout(qordobaConfigurationJson['time_out']); 
+				        httpClient.open('GET', pageUrl);
+				        httpClient.setRequestHeader("User-Agent", "demandware-connector/" + version.getVersion());
+				        httpClient.setRequestHeader('X-AUTH-TOKEN', authToken);
+				        httpClient.send(request);	
+				        
+				        if (httpClient.statusCode == 200) { 
+							LOGGER.error("PAGE data retrieved {0}, {1}", pageUrl, httpClient.text);
+							var downloadFile = JSON.parse(httpClient.text);
+				        } else {
+				            LOGGER.error('retrieving PAGE data failed: URL={0}, statusCode={1}, errorText="{2}"', pageUrl, httpClient.statusCode, httpClient.errorText);
+				            return PIPELET_ERROR;
+				        }		
+						LOGGER.error("--4");
+				        
+				        var httpClient : HTTPClient = new HTTPClient();
+				        var pageUrl = qordobaConfigurationJson['api_url'] + 
+				        	'file/download?token=' + encodeURIComponent(downloadFile['token']) + 
+				        	'&filename=' + encodeURIComponent(downloadFile['filename']); 
+				        httpClient.setTimeout(qordobaConfigurationJson['time_out']); 
+				        httpClient.open('GET', pageUrl);
+				        httpClient.setRequestHeader("User-Agent", "demandware-connector/" + version.getVersion());
+				        httpClient.setRequestHeader('X-AUTH-TOKEN', authToken);
+				        httpClient.send(request);	
+						LOGGER.error("--5");
+				        
+				        if (httpClient.statusCode == 200) { 
+							LOGGER.error("FINALLY! Translation data retrieved {0}, {1}", pageUrl, httpClient.text);
+							var downloadFile = JSON.parse(httpClient.text);						
+							downloadedLocales[locale].translation = downloadFile;
+				        } else {
+				            LOGGER.error('retrieving TRANSLATION data failed: URL={0}, statusCode={1}, errorText="{2}"', pageUrl, httpClient.statusCode, httpClient.errorText);
+				            return PIPELET_ERROR;
+				        }
+					}	
+				}
+			} else {
+				LOGGER.error("Translation havent pages {0}", JSON.stringify(downloadedLocales[locale]));
+			}
+		}   
+		     
+        LOGGER.error("Localizations {0}", JSON.stringify(downloadedLocales));
+        
+        try {
+            var itemType = submission.custom['itemType'];
+            switch (itemType) {
+                case 'product' :
+                    downloadProduct(httpClient, submission, submission.custom['itemId'], downloadedLocales);
+                    break;
+                case 'content' :
+                    downloadContent(httpClient, submission, submission.custom['itemId'], downloadedLocales);
+                    break;
+                case 'category' :
+                    downloadCategory(httpClient, submission, submission.custom['itemId'], downloadedLocales);
+                    break;
+            }
+            
+			var path = new Array();            
+			for(var locale in downloadedLocales) {
+				var filepath = '/qordoba/' + itemType + '/download/' + itemType + '_' + submission.custom['itemId'] + '_' + downloadedLocales[locale].localeData['code'] + '.xml';
+				LOGGER.error(filepath);
+				path.push(filepath);
+			}            
+            pdict.type = itemType;
+            pdict.path = path;
+
+        } catch (e) {
+            LOGGER.errorException("submissionBoard.download execution failed, uuid={0}, itemId={1}, locale={2}", pdict.uuid, pdict.itemId, pdict.locale, e);
+            throw "download submission failed"
+        }
+    } catch (e) {
+        LOGGER.errorException("submissionBoard.download execution failed, uuid={0}, itemId={1}, locale={2}", pdict.uuid, pdict.itemId, pdict.locale, e);
+        return PIPELET_ERROR;
+    }
+
+    LOGGER.debug('Successfully downloaded path="{0}"', pdict.path);
+    return PIPELET_NEXT;
+}

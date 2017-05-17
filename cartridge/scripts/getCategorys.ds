@@ -1,0 +1,46 @@
+/**
+*
+*   @input subCategoryId : String
+*   @output category : dw.catalog.Category
+*   @output subCategoties : dw.util.Iterator
+*   @output localesList : dw.util.ArrayList
+*
+*/
+importPackage( dw.system );
+importPackage(dw.catalog);
+importPackage(dw.object);
+importPackage(dw.util);
+importScript("helpFunctions.ds");
+importScript( "/utils/ExceptionLog.ds" );
+
+var LOGGER : ExceptionLog = new ExceptionLog(Logger.getLogger("qordoba", "getCategorys"));
+
+/**
+    Get either the category or subcategory that's passed in.
+*/
+function execute( pdict : PipelineDictionary ) : Number
+{
+   try {
+        pdict.localesList = getTargetLocalesList();
+		
+        if (pdict.subCategoryId) {
+            pdict.category = CatalogMgr.getCategory(pdict.subCategoryId);
+            var parent : Category = pdict.category.getParent();
+            pdict.subCategoties = pdict.category.getSubCategories().iterator();
+        } else {
+        	
+        	//LOGGER.debugException({ "sitecat": CatalogMgr.getSiteCatalog().constructor.name });
+        	
+            pdict.category = CatalogMgr.getSiteCatalog().getRoot();
+            if(pdict.category != null) {
+	            var parent : Category = pdict.category.getParent();
+	            pdict.subCategoties = CatalogMgr.getSiteCatalog().getRoot().getSubCategories().iterator();
+            }
+        }
+    } catch (e) {
+        LOGGER.errorException("getCategorys execution failed", e);
+        return PIPELET_ERROR;
+    }
+    
+    return PIPELET_NEXT;
+}

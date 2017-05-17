@@ -1,0 +1,40 @@
+importPackage( dw.system );
+importPackage( dw.crypto );
+importPackage( dw.net );
+importScript( "service/localeService.ds" );
+importScript( "file_api/httpUtils.ds" );
+importScript( "/utils/ExceptionLog.ds" );
+
+var GET_REQUEST: String = "GET";
+var ENCODING: String = "UTF-8";
+
+/**
+    Get file status from qordoba
+*/
+function fileStatus(fileUri: String): HTTPClient {
+    return sendHttpRequest(GET_REQUEST,  "/file/statuses?"
+        + "fileUri=" + Encoding.toURI(fileUri, ENCODING)
+    );
+}
+
+/**
+    Get file last modified time from qordoba
+*/
+function lastModified(fileUri: String): HTTPClient {
+    return sendHttpRequest(GET_REQUEST, "/file/last_modified?"
+        + "fileUri=" + Encoding.toURI(fileUri, ENCODING)
+    );
+}
+
+/**
+     Makes test connection to qordoba API
+ */
+function checkConnection(apiUrl: String, login: String, password: String): HTTPClient {
+    return sendTestConnection(apiUrl + "login", login, password);
+}
+
+if (typeof (exports) !== 'undefined') {
+    exports.fileStatus = fileStatus;
+    exports.lastModified = lastModified;
+    exports.checkConnection = checkConnection;
+}

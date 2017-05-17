@@ -1,0 +1,31 @@
+/**
+* Checks connection to qordoba API
+*
+* @input login : String  qordoba api login
+* @input apiUrl : String  qordoba project URL
+* @input password : String  qordoba api password
+* @output statusCode : Number
+* @output errorText : String
+*/
+
+importPackage( dw.system );
+importPackage( dw.net );
+importScript( "/utils/ExceptionLog.ds" );
+
+
+var qordobaFileApi = require("../file_api/qordobaFileApi.ds");
+
+var LOGGER : ExceptionLog = new ExceptionLog(Logger.getLogger("qordoba", "checkConfiguration"));
+
+function execute( args : PipelineDictionary ) : Number
+{	
+    var checkResult : HTTPClient = qordobaFileApi.checkConnection(args.apiUrl, args.login, args.password);
+    	
+    args.statusCode = checkResult.statusCode;
+    args.errorText = checkResult.errorText;
+
+	LOGGER.errorException("Config object: " +  JSON.stringify(checkResult)); 
+
+    
+    return PIPELET_NEXT;
+}
